@@ -24,6 +24,7 @@ from src.utils.args import (
     parse_loss_weight,
 )
 from src.utils.callbacks import TesterCallback, PlotCallback, LossCallback
+from src.utils.grace import GraceCurriculumCallback
 from src.utils.rar import rar_wrapper
 from src.model.gracepinn import GracePINNConfig, GracePINNWeighting
 
@@ -82,6 +83,15 @@ if __name__ == "__main__":
     parser.add_argument('--gracepinn-percentiles', type=str, default="5 95", help='Percentile range (e.g. "5 95") for robust normalization of residual signals.')
     parser.add_argument('--gracepinn-weight-clip', type=str, default="0.2 0.8", help='Bounds (e.g. "0.2 0.8") for the curriculum weights.')
     parser.add_argument('--gracepinn-time-dims', type=str, default="", help='Optional comma/space separated indices treated as time dimensions.')
+    parser.add_argument('--grace-alpha', type=float, default=0.5, help='EMA factor for Grace curriculum updates.')
+    parser.add_argument('--grace-delta', type=float, default=0.1, help='Minimum value for the Grace eta schedule.')
+    parser.add_argument('--grace-radius', type=float, default=0.25, help='Neighborhood radius for the Grace graph (<=0 enables auto).')
+    parser.add_argument('--grace-clip-low', type=float, default=5.0, help='Lower percentile for residual normalization in Grace.')
+    parser.add_argument('--grace-clip-high', type=float, default=95.0, help='Upper percentile for residual normalization in Grace.')
+    parser.add_argument('--grace-vmin', type=float, default=0.2, help='Minimum unnormalized curriculum weight for Grace.')
+    parser.add_argument('--grace-vmax', type=float, default=0.8, help='Maximum unnormalized curriculum weight for Grace.')
+    parser.add_argument('--grace-knn', type=int, default=8, help='Fallback number of neighbors for Grace when the radius graph is empty.')
+    parser.add_argument('--grace-debug', action='store_true', help='Dump Grace curriculum diagnostics into the run directory.')
 
     command_args = parser.parse_args()
 
@@ -154,16 +164,32 @@ if __name__ == "__main__":
             # schedule the task using trainer.add_task(get_model_other, {training args})
             return model
 
+        callbacks = [
+            TesterCallback(log_every=command_args.log_every),
+            PlotCallback(log_every=command_args.plot_every, fast=True),
+            LossCallback(verbose=True),
+        ]
+        if command_args.method == "grace":
+            callbacks.append(
+                GraceCurriculumCallback(
+                    total_iterations=command_args.iter,
+                    alpha=command_args.grace_alpha,
+                    delta=command_args.grace_delta,
+                    radius=command_args.grace_radius,
+                    percentiles=(command_args.grace_clip_low, command_args.grace_clip_high),
+                    v_bounds=(command_args.grace_vmin, command_args.grace_vmax),
+                    k_neighbors=command_args.grace_knn,
+                    dump_debug=command_args.grace_debug,
+                )
+            )
+
         trainer.add_task(
-            get_model_dde, {
+            get_model_dde,
+            {
                 "iterations": command_args.iter,
                 "display_every": command_args.log_every,
-                "callbacks": [
-                    TesterCallback(log_every=command_args.log_every),
-                    PlotCallback(log_every=command_args.plot_every, fast=True),
-                    LossCallback(verbose=True),
-                ]
-            }
+                "callbacks": callbacks,
+            },
         )
 
     trainer.setup(__file__, seed)

@@ -111,10 +111,49 @@ class PDE(Data):
         self.test_x, self.test_y = None, None
         self.train_aux_vars, self.test_aux_vars = None, None
 
+        self.pde_weight_scale = None
+        self._pde_weight_scale_tensor = None
+        self._pde_weight_scale_size = 0
+
         self.train_next_batch()
         self.test()
 
+    def set_pde_weight_scale(self, scale):
+        """Store PDE weighting factors and cache backend tensors."""
+
+        if scale is None:
+            self.pde_weight_scale = None
+            self._pde_weight_scale_tensor = None
+            self._pde_weight_scale_size = 0
+            return
+
+        np_scale = np.asarray(scale, dtype=config.real(np))
+        if np_scale.ndim == 0:
+            np_scale = np_scale.reshape(1)
+        else:
+            np_scale = np_scale.reshape(-1)
+        self.pde_weight_scale = np_scale
+        self._pde_weight_scale_size = int(np_scale.shape[0])
+        self._pde_weight_scale_tensor = bkd.as_tensor(np_scale)
+
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
+        return self._losses_impl(targets, outputs, loss_fn, inputs, model, aux=aux)
+
+    def losses_test(self, targets, outputs, loss_fn, inputs, model, aux=None):
+        return self._losses_impl(
+            targets, outputs, loss_fn, inputs, model, aux=aux, apply_pde_scale=False
+        )
+
+    def _losses_impl(
+        self,
+        targets,
+        outputs,
+        loss_fn,
+        inputs,
+        model,
+        aux=None,
+        apply_pde_scale=True,
+    ):
         if backend_name in ["tensorflow.compat.v1", "tensorflow", "pytorch", "paddle"]:
             outputs_pde = outputs
         elif backend_name == "jax":
@@ -147,9 +186,34 @@ class PDE(Data):
         bcs_start = np.cumsum([0] + self.num_bcs)
         bcs_start = list(map(int, bcs_start))
         error_f = [fi[bcs_start[-1] :] for fi in f]
-        losses = [
-            loss_fn[i](bkd.zeros_like(error), error) for i, error in enumerate(error_f)
-        ]
+        losses = []
+        for i, error in enumerate(error_f):
+            scaled_error = error
+            if (
+                apply_pde_scale
+                and self._pde_weight_scale_tensor is not None
+                and self._pde_weight_scale_size > 0
+            ):
+                # Only apply the cached PDE weights when the residual tensor matches the
+                # number of PDE training points. During testing, DeepXDE may evaluate
+                # the PDE residuals on a different set of points, in which case the
+                # cached scale should be ignored to avoid a shape mismatch.
+                error_shape = bkd.shape(error)
+                error_size = None
+                if error_shape:
+                    error_size = error_shape[0]
+                if error_size is None and hasattr(error, "shape"):
+                    error_size = error.shape[0]
+                if error_size == self._pde_weight_scale_size:
+                    scale_tensor = self._pde_weight_scale_tensor
+                    if backend_name == "pytorch":
+                        scale_tensor = scale_tensor.to(error.device, dtype=error.dtype)
+                    target_shape = [
+                        self._pde_weight_scale_size
+                    ] + [1] * (bkd.ndim(error) - 1)
+                    scale_tensor = bkd.reshape(scale_tensor, tuple(target_shape))
+                    scaled_error = scale_tensor * error
+            losses.append(loss_fn[i](bkd.zeros_like(error), scaled_error))
         for i, bc in enumerate(self.bcs):
             beg, end = bcs_start[i], bcs_start[i + 1]
             # The same BC points are used for training and testing.
