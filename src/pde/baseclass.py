@@ -25,6 +25,8 @@ class BasePDE():
         self.ref_data = None
 
         self.recommend_net = None
+        self.data_class = dde.data.PDE
+        self.data_kwargs = {}
 
     @property
     def input_dim(self):
@@ -182,17 +184,28 @@ class BasePDE():
     def create_model(self, net):
         self.check()
         self.net = net
-        self.data = dde.data.PDE(
+        data_kwargs = dict(self.data_kwargs)
+        data_cls = self.data_class
+        self.data = data_cls(
             self.geom,
             self.pde,
             self.bcs,
             num_domain=self.num_domain_points,
             num_boundary=self.num_boundary_points,
             num_test=self.num_test_points,
+            **data_kwargs,
         )
         self.model = dde.Model(self.data, net)
         self.model.pde = self
+        if hasattr(self.data, "attach_model"):
+            self.data.attach_model(self.model)
         return self.model
+
+    def enable_gracepinn(self, weight_strategy):
+        from src.model.gracepinn import GracePDEData
+
+        self.data_class = GracePDEData
+        self.data_kwargs = {"weight_strategy": weight_strategy}
 
 
 class BaseTimePDE(BasePDE):
@@ -201,6 +214,7 @@ class BaseTimePDE(BasePDE):
         super().__init__()
         self.geomtime = None
         self.num_initial_points = DEFAULT_NUM_INITIAL_POINTS
+        self.data_class = dde.data.TimePDE
 
     @property
     def input_dim(self):
@@ -228,15 +242,26 @@ class BaseTimePDE(BasePDE):
     def create_model(self, net):
         self.check()
         self.net = net
-        self.data = dde.data.TimePDE(
+        data_kwargs = dict(self.data_kwargs)
+        data_cls = self.data_class
+        self.data = data_cls(
             self.geomtime,
             self.pde,
             self.bcs,
             num_domain=self.num_domain_points,
             num_boundary=self.num_boundary_points,
             num_initial=self.num_initial_points,
-            num_test=self.num_test_points
+            num_test=self.num_test_points,
+            **data_kwargs,
         )
         self.model = dde.Model(self.data, net)
         self.model.pde = self
+        if hasattr(self.data, "attach_model"):
+            self.data.attach_model(self.model)
         return self.model
+
+    def enable_gracepinn(self, weight_strategy):
+        from src.model.gracepinn import GraceTimePDEData
+
+        self.data_class = GraceTimePDEData
+        self.data_kwargs = {"weight_strategy": weight_strategy}
