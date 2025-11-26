@@ -47,18 +47,18 @@ class GracePINNConfig:
 
     total_iterations: int
     k: int = 12
-    alpha: float = 0.1
-    sigma_scale: float = 1.0
-    percentiles: Tuple[float, float] = (5.0, 95.0)
-    weight_clip: Tuple[float, float] = (0.2, 0.8)
+    alpha: float = 0.5
+    # sigma_scale: float = 1.0
+    percentiles: Tuple[float, float] = (25.0, 75.0)
+    weight_clip: Tuple[float, float] = (0.01, 0.99)
     time_dims: Optional[Sequence[int]] = None
-    radius: Optional[float] = None
+    radius: Optional[float] = 0.15
 
     def __post_init__(self) -> None:
         self.total_iterations = max(int(self.total_iterations), 1)
         self.k = max(int(self.k), 1)
         self.alpha = max(float(self.alpha), 0.0)
-        self.sigma_scale = max(float(self.sigma_scale), _EPS)
+        # self.sigma_scale = max(float(self.sigma_scale), _EPS)
 
         low, high = self.percentiles
         if not 0.0 <= low < high <= 100.0:
@@ -66,7 +66,7 @@ class GracePINNConfig:
 
         vmin, vmax = self.weight_clip
         if not 0.0 <= vmin <= vmax <= 1.0:
-            raise ValueError("weight_clip must satisfy 0 <= vmin <= vmax <= 1")
+            raise ValueError("weight clip must satisfy 0 <= vmin <= vmax <= 1")
 
         if self.time_dims is not None:
             self.time_dims = tuple(int(dim) for dim in self.time_dims)
@@ -194,13 +194,16 @@ class GracePINNWeighting:
         self.last_difficulty = difficulty
 
         # --- 7) Curriculum map v_i(k) = (1-p)(1-D) + p D ---
-        curriculum = (1.0 - progress) * (1.0 - difficulty) + progress * difficulty
+        # curriculum = (1.0 - progress) * (1.0 - difficulty) + progress * difficulty
 
-        weights = torch.clamp(
-            curriculum,
-            self.config.weight_clip[0],
-            self.config.weight_clip[1],
-        )
+        # weights = torch.clamp(
+        #     curriculum,
+        #     self.config.weight_clip[0],
+        #     self.config.weight_clip[1],
+        # )
+        # self.last_weights = weights
+        # return weights
+        weights = difficulty
         self.last_weights = weights
         return weights
 
@@ -279,7 +282,7 @@ class GracePINNWeighting:
                 sigma = torch.tensor(1.0, device=dists.device, dtype=dists.dtype)
             else:
                 sigma = torch.median(positive)
-        sigma = sigma * self.config.sigma_scale
+        # sigma = sigma * self.config.sigma_scale
         if not torch.isfinite(sigma) or sigma <= 0:
             sigma = torch.tensor(1.0, device=sigma.device, dtype=sigma.dtype)
         return sigma
