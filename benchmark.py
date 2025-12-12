@@ -24,7 +24,7 @@ from src.utils.args import (
     parse_loss_weight,
 )
 from src.utils.callbacks import TesterCallback, PlotCallback, LossCallback
-from src.utils.grace import GraceCurriculumCallback
+# from src.utils.grace import GraceCurriculumCallback
 from src.utils.rar import rar_wrapper
 from src.model.gracepinn import GracePINNConfig, GracePINNWeighting
 
@@ -77,21 +77,22 @@ if __name__ == "__main__":
     parser.add_argument('--plot-every', type=int, default=2000)
     parser.add_argument('--repeat', type=int, default=1)
     parser.add_argument('--method', type=str, default="adam")
-    parser.add_argument('--gracepinn-k', type=int, default=12, help='Number of neighbors in the GracePINN graph.')
-    parser.add_argument('--gracepinn-alpha', type=float, default=0.1, help='Temporal scaling coefficient in the GracePINN metric.')
-    parser.add_argument('--gracepinn-sigma-scale', type=float, default=1.0, help='Multiplier applied to the median neighbor distance for the Gaussian kernel.')
-    parser.add_argument('--gracepinn-percentiles', type=str, default="5 95", help='Percentile range (e.g. "5 95") for robust normalization of residual signals.')
-    parser.add_argument('--gracepinn-weight-clip', type=str, default="0.2 0.8", help='Bounds (e.g. "0.2 0.8") for the curriculum weights.')
-    parser.add_argument('--gracepinn-time-dims', type=str, default="", help='Optional comma/space separated indices treated as time dimensions.')
-    parser.add_argument('--grace-alpha', type=float, default=0.5, help='EMA factor for Grace curriculum updates.')
-    parser.add_argument('--grace-delta', type=float, default=0.1, help='Minimum value for the Grace eta schedule.')
-    parser.add_argument('--grace-radius', type=float, default=0.25, help='Neighborhood radius for the Grace graph (<=0 enables auto).')
-    parser.add_argument('--grace-clip-low', type=float, default=5.0, help='Lower percentile for residual normalization in Grace.')
-    parser.add_argument('--grace-clip-high', type=float, default=95.0, help='Upper percentile for residual normalization in Grace.')
-    parser.add_argument('--grace-vmin', type=float, default=0.2, help='Minimum unnormalized curriculum weight for Grace.')
-    parser.add_argument('--grace-vmax', type=float, default=0.8, help='Maximum unnormalized curriculum weight for Grace.')
-    parser.add_argument('--grace-knn', type=int, default=8, help='Fallback number of neighbors for Grace when the radius graph is empty.')
-    parser.add_argument('--grace-debug', action='store_true', help='Dump Grace curriculum diagnostics into the run directory.')
+    # parser.add_argument('--gracepinn-k', type=int, default=12, help='Number of neighbors in the GracePINN graph.')
+    # parser.add_argument('--gracepinn-alpha', type=float, default=0.1, help='Temporal scaling coefficient in the GracePINN metric.')
+    # # parser.add_argument('--gracepinn-sigma-scale', type=float, default=1.0, help='Multiplier applied to the median neighbor distance for the Gaussian kernel.')
+    # parser.add_argument('--gracepinn-percentiles', type=str, default="5 95", help='Percentile range (e.g. "5 95") for robust normalization of residual signals.')
+    # parser.add_argument('--gracepinn-weight-clip', type=str, default="0.2 0.8", help='Bounds (e.g. "0.2 0.8") for the curriculum weights.')
+    # parser.add_argument('--gracepinn-time-dims', type=str, default="", help='Optional comma/space separated indices treated as time dimensions.')
+    # parser.add_argument('--gracepinn-radius', type=float, default=0.15, help='Radius δ for graph; <=0 means pure KNN.')
+    # parser.add_argument('--grace-alpha', type=float, default=0.5, help='EMA factor for Grace curriculum updates.')
+    # parser.add_argument('--grace-delta', type=float, default=0.1, help='Minimum value for the Grace eta schedule.')
+    # parser.add_argument('--grace-radius', type=float, default=0.25, help='Neighborhood radius for the Grace graph (<=0 enables auto).')
+    # parser.add_argument('--grace-clip-low', type=float, default=5.0, help='Lower percentile for residual normalization in Grace.')
+    # parser.add_argument('--grace-clip-high', type=float, default=95.0, help='Upper percentile for residual normalization in Grace.')
+    # parser.add_argument('--grace-vmin', type=float, default=0.2, help='Minimum unnormalized curriculum weight for Grace.')
+    # parser.add_argument('--grace-vmax', type=float, default=0.8, help='Maximum unnormalized curriculum weight for Grace.')
+    # parser.add_argument('--grace-knn', type=int, default=8, help='Fallback number of neighbors for Grace when the radius graph is empty.')
+    # parser.add_argument('--grace-debug', action='store_true', help='Dump Grace curriculum diagnostics into the run directory.')
 
     command_args = parser.parse_args()
 
@@ -112,20 +113,37 @@ if __name__ == "__main__":
             # pde.training_points()
             if command_args.method == "gepinn":
                 pde.use_gepinn()
+            # elif command_args.method == "gracepinn":
+            #     percentiles = parse_float_pair(command_args.gracepinn_percentiles, (5.0, 95.0))
+            #     weight_clip = parse_float_pair(command_args.gracepinn_weight_clip, (0.2, 0.8))
+            #     time_dims = parse_int_list(command_args.gracepinn_time_dims)
+            #     config = GracePINNConfig(
+            #         total_iterations=max(command_args.iter, 1),
+            #         k=command_args.gracepinn_k,
+            #         alpha=command_args.gracepinn_alpha,
+            #         sigma_scale=command_args.gracepinn_sigma_scale,
+            #         percentiles=percentiles,
+            #         weight_clip=weight_clip,
+            #         time_dims=time_dims if time_dims else None,
+            #     )
+            #     pde.enable_gracepinn(GracePINNWeighting(config))
+
+            # elif command_args.method == "gracepinn":
+            #     percentiles = parse_float_pair(
+            #         command_args.gracepinn_percentiles, (25.0, 75.0)
+            #     )
+            #     time_dims = parse_int_list(command_args.gracepinn_time_dims)
+            #     config = GracePINNConfig(
+            #         total_iterations=max(command_args.iter, 1),
+            #         k=command_args.gracepinn_k,
+            #         alpha=command_args.gracepinn_alpha,
+            #         percentiles=percentiles,
+            #         time_dims=time_dims if time_dims else None,
+            #         radius=command_args.gracepinn_radius,
+            #     )
+            #     pde.enable_gracepinn(GracePINNWeighting(config))
             elif command_args.method == "gracepinn":
-                percentiles = parse_float_pair(command_args.gracepinn_percentiles, (5.0, 95.0))
-                weight_clip = parse_float_pair(command_args.gracepinn_weight_clip, (0.2, 0.8))
-                time_dims = parse_int_list(command_args.gracepinn_time_dims)
-                config = GracePINNConfig(
-                    total_iterations=max(command_args.iter, 1),
-                    k=command_args.gracepinn_k,
-                    alpha=command_args.gracepinn_alpha,
-                    sigma_scale=command_args.gracepinn_sigma_scale,
-                    percentiles=percentiles,
-                    weight_clip=weight_clip,
-                    time_dims=time_dims if time_dims else None,
-                )
-                pde.enable_gracepinn(GracePINNWeighting(config))
+                pde.enable_gracepinn(total_iterations=command_args.iter)
 
             net = dde.nn.FNN([pde.input_dim] + parse_hidden_layers(command_args) + [pde.output_dim], "tanh", "Glorot normal")
             if command_args.method == "laaf":
@@ -169,19 +187,19 @@ if __name__ == "__main__":
             PlotCallback(log_every=command_args.plot_every, fast=True),
             LossCallback(verbose=True),
         ]
-        if command_args.method == "grace":
-            callbacks.append(
-                GraceCurriculumCallback(
-                    total_iterations=command_args.iter,
-                    alpha=command_args.grace_alpha,
-                    delta=command_args.grace_delta,
-                    radius=command_args.grace_radius,
-                    percentiles=(command_args.grace_clip_low, command_args.grace_clip_high),
-                    v_bounds=(command_args.grace_vmin, command_args.grace_vmax),
-                    k_neighbors=command_args.grace_knn,
-                    dump_debug=command_args.grace_debug,
-                )
-            )
+        # if command_args.method == "grace":
+        #     callbacks.append(
+        #         GraceCurriculumCallback(
+        #             total_iterations=command_args.iter,
+        #             alpha=command_args.grace_alpha,
+        #             delta=command_args.grace_delta,
+        #             radius=command_args.grace_radius,
+        #             percentiles=(command_args.grace_clip_low, command_args.grace_clip_high),
+        #             v_bounds=(command_args.grace_vmin, command_args.grace_vmax),
+        #             k_neighbors=command_args.grace_knn,
+        #             dump_debug=command_args.grace_debug,
+        #         )
+        #     )
 
         trainer.add_task(
             get_model_dde,

@@ -201,9 +201,13 @@ class BasePDE():
             self.data.attach_model(self.model)
         return self.model
 
-    def enable_gracepinn(self, weight_strategy):
-        from src.model.gracepinn import GracePDEData
-
+    def enable_gracepinn(self, total_iterations: int, **kwargs):
+        from src.model.gracepinn import GracePDEData, build_gracepinn_for_pde
+        weight_strategy = build_gracepinn_for_pde(
+            self,
+            total_iterations=total_iterations,
+            **kwargs,
+        )
         self.data_class = GracePDEData
         self.data_kwargs = {"weight_strategy": weight_strategy}
 
@@ -260,8 +264,13 @@ class BaseTimePDE(BasePDE):
             self.data.attach_model(self.model)
         return self.model
 
-    def enable_gracepinn(self, weight_strategy):
-        from src.model.gracepinn import GraceTimePDEData
-
+    def enable_gracepinn(self, total_iterations: int, **kwargs):
+        from src.model.gracepinn import GraceTimePDEData, build_gracepinn_for_pde
+        weight_strategy = build_gracepinn_for_pde(
+            self,
+            total_iterations=total_iterations,
+            **kwargs,
+        )
         self.data_class = GraceTimePDEData
         self.data_kwargs = {"weight_strategy": weight_strategy}
+
