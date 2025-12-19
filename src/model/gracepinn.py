@@ -201,43 +201,42 @@ class GracePINNWeighting:
         return (coords - min_vals) / span
 
     def _build_adjacency_mask(self, dist: torch.Tensor) -> torch.Tensor:
-        """Build adjacency mask.
-
-        - Nếu radius > 0: dùng rule d(i,j) < radius trước,
-          node nào cô lập thì fallback KNN với K = min degree của các node có hàng xóm.
-        - Nếu radius <= 0 hoặc radius fail: pure KNN với k neighbors.
-        """
         N = dist.shape[0]
-        device = dist.device
-        eye = torch.eye(N, device=device, dtype=torch.bool)
-
         radius = self.config.radius
+
         if radius is not None and radius > 0.0:
-            mask = (dist < radius) & (~eye)
+            # mask = (dist < radius) & (~eye)  # OOM vì eye N×N
+            mask = dist < radius
+            mask.fill_diagonal_(False)  # y hệt "~eye" nhưng không tạo eye
+
             neighbor_counts = mask.sum(dim=1)
             has_neighbors = neighbor_counts > 0
 
             if has_neighbors.any():
                 K = int(neighbor_counts[has_neighbors].min().item())
                 if K > 0:
-                    # Node cô lập: fallback KNN, nhưng chỉ loop trên ít node này
                     isolated_idx = (~has_neighbors).nonzero(as_tuple=False).view(-1)
-                    for i in isolated_idx.tolist():
-                        row = dist[i].clone()
-                        row[i] = float("inf")
-                        _, idx_knn = torch.topk(row, K, largest=False)
-                        mask[i, idx_knn] = True
+                    if isolated_idx.numel() > 0:
+                        # Vectorized fallback KNN cho toàn bộ isolated (khỏi loop + clone row từng i)
+                        dist_iso = dist[isolated_idx].clone()  # (M, N)
+
+                        # set self-distance = inf cho từng row
+                        rows = torch.arange(dist_iso.shape[0], device=dist.device)
+                        dist_iso[rows, isolated_idx] = float("inf")
+
+                        _, idx_knn = torch.topk(dist_iso, K, dim=1, largest=False)
+                        mask[isolated_idx] = mask[isolated_idx].scatter(1, idx_knn, True)
                 return mask
             # nếu tất cả đều cô lập → rơi xuống pure KNN
 
-        # ----------------- Pure KNN (vectorized) -----------------
+        # ----------------- Pure KNN -----------------
         k = min(self.config.k, max(N - 1, 1))
         if k <= 0:
             return torch.zeros_like(dist, dtype=torch.bool)
 
-        # tránh self-edge bằng cách cộng inf lên đường chéo
-        dist_knn = dist + eye.to(dist.dtype) * float("inf")
-        _, idx = torch.topk(dist_knn, k, dim=1, largest=False)  # (N, k)
+        dist_knn = dist.clone()          # tránh tạo eye*inf
+        dist_knn.fill_diagonal_(float("inf"))
+        _, idx = torch.topk(dist_knn, k, dim=1, largest=False)
 
         mask = torch.zeros_like(dist, dtype=torch.bool)
         mask.scatter_(1, idx, True)
