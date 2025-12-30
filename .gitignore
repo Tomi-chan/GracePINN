@@ -168,3 +168,24 @@ cython_debug/
 # vscode
 .vscode/
 .idea/
+
+# Kết quả chạy PINNacle
+runs/
+other_runs/
+summary.csv
+
+# Các file tạm khác thường gặp
+*.pt
+*.pth
+__pycache__/
+*.pyc
+.pytorch/
+*.log
+*.csv.bak
+*.xlsx
+*.ipynb_checkpoints/
+
+# Virtual env (nếu có)
+venv/
+env/
+
