@@ -189,3 +189,6 @@ __pycache__/
 venv/
 env/
 
+other_runs/
+summary.csv
+runs/
