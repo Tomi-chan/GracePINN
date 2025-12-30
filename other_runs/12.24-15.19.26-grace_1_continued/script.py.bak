@@ -24,12 +24,11 @@ from src.utils.rar import rar_wrapper
 # It is recommended not to modify this example file.
 # Please copy it as benchmark_xxx.py and make changes according to your own ideas.
 pde_list = \
-    [Burgers1D, Burgers2D] + \
-    [Poisson2D_Classic, PoissonBoltzmann2D, Poisson3D_ComplexGeometry, Poisson2D_ManyArea] + \
-    [Heat2D_VaryingCoef, Heat2D_Multiscale, Heat2D_ComplexGeometry, Heat2D_LongTime] + \
-    [NS2D_LidDriven, NS2D_BackStep, NS2D_LongTime] + \
-    [Wave1D, Wave2D_Heterogeneous, Wave2D_LongTime] + \
-    [KuramotoSivashinskyEquation, GrayScottEquation] + \
+    [Burgers2D] + \
+    [Poisson2D_Classic, PoissonBoltzmann2D, Poisson3D_ComplexGeometry] + \
+    [Heat2D_VaryingCoef] + \
+    [NS2D_LidDriven] + \
+    [Wave1D, Wave2D_Heterogeneous] + \
     [PoissonND, HeatND]
 
 # pde_list = \

@@ -17,20 +17,26 @@ from src.pde.ns import NS2D_LidDriven, NS2D_BackStep, NS2D_LongTime
 from src.pde.poisson import Poisson2D_Classic, PoissonBoltzmann2D, Poisson3D_ComplexGeometry, Poisson2D_ManyArea, PoissonND
 from src.pde.wave import Wave1D, Wave2D_Heterogeneous, Wave2D_LongTime
 from src.pde.inverse import PoissonInv, HeatInv
-from src.utils.args import parse_hidden_layers, parse_loss_weight
+from src.utils.args import (
+    parse_float_pair,
+    parse_hidden_layers,
+    parse_int_list,
+    parse_loss_weight,
+)
 from src.utils.callbacks import TesterCallback, PlotCallback, LossCallback
+# from src.utils.grace import GraceCurriculumCallback
 from src.utils.rar import rar_wrapper
+from src.model.gracepinn import GracePINNConfig, GracePINNWeighting
 
 # It is recommended not to modify this example file.
 # Please copy it as benchmark_xxx.py and make changes according to your own ideas.
 pde_list = \
-    [Burgers1D, Burgers2D] + \
-    [Poisson2D_Classic, PoissonBoltzmann2D, Poisson3D_ComplexGeometry, Poisson2D_ManyArea] + \
-    [Heat2D_VaryingCoef, Heat2D_Multiscale, Heat2D_ComplexGeometry, Heat2D_LongTime] + \
-    [NS2D_LidDriven, NS2D_BackStep, NS2D_LongTime] + \
-    [Wave1D, Wave2D_Heterogeneous, Wave2D_LongTime] + \
-    [KuramotoSivashinskyEquation, GrayScottEquation] + \
-    [PoissonND, HeatND]
+    [Burgers1D] + \
+    [Poisson2D_ManyArea] + \
+    [Heat2D_Multiscale, Heat2D_ComplexGeometry, Heat2D_LongTime] + \
+    [NS2D_BackStep, NS2D_LongTime] + \
+    [Wave2D_LongTime] + \
+    [KuramotoSivashinskyEquation, GrayScottEquation]
 
 # pde_list = \
 #     [Burgers1D, Burgers2D] + \
@@ -79,6 +85,22 @@ if __name__ == "__main__":
     parser.add_argument('--plot-every', type=int, default=2000)
     parser.add_argument('--repeat', type=int, default=1)
     parser.add_argument('--method', type=str, default="adam")
+    # parser.add_argument('--gracepinn-k', type=int, default=12, help='Number of neighbors in the GracePINN graph.')
+    # parser.add_argument('--gracepinn-alpha', type=float, default=0.1, help='Temporal scaling coefficient in the GracePINN metric.')
+    # # parser.add_argument('--gracepinn-sigma-scale', type=float, default=1.0, help='Multiplier applied to the median neighbor distance for the Gaussian kernel.')
+    # parser.add_argument('--gracepinn-percentiles', type=str, default="5 95", help='Percentile range (e.g. "5 95") for robust normalization of residual signals.')
+    # parser.add_argument('--gracepinn-weight-clip', type=str, default="0.2 0.8", help='Bounds (e.g. "0.2 0.8") for the curriculum weights.')
+    # parser.add_argument('--gracepinn-time-dims', type=str, default="", help='Optional comma/space separated indices treated as time dimensions.')
+    # parser.add_argument('--gracepinn-radius', type=float, default=0.15, help='Radius δ for graph; <=0 means pure KNN.')
+    # parser.add_argument('--grace-alpha', type=float, default=0.5, help='EMA factor for Grace curriculum updates.')
+    # parser.add_argument('--grace-delta', type=float, default=0.1, help='Minimum value for the Grace eta schedule.')
+    # parser.add_argument('--grace-radius', type=float, default=0.25, help='Neighborhood radius for the Grace graph (<=0 enables auto).')
+    # parser.add_argument('--grace-clip-low', type=float, default=5.0, help='Lower percentile for residual normalization in Grace.')
+    # parser.add_argument('--grace-clip-high', type=float, default=95.0, help='Upper percentile for residual normalization in Grace.')
+    # parser.add_argument('--grace-vmin', type=float, default=0.2, help='Minimum unnormalized curriculum weight for Grace.')
+    # parser.add_argument('--grace-vmax', type=float, default=0.8, help='Maximum unnormalized curriculum weight for Grace.')
+    # parser.add_argument('--grace-knn', type=int, default=8, help='Fallback number of neighbors for Grace when the radius graph is empty.')
+    # parser.add_argument('--grace-debug', action='store_true', help='Dump Grace curriculum diagnostics into the run directory.')
 
     command_args = parser.parse_args()
 
@@ -97,10 +119,6 @@ if __name__ == "__main__":
                 pde = pde_config()
 
             # pde.training_points()
-            valid = {"adam","gepinn","gracepinn","laaf","gaaf","multiadam","lra","ntk","lbfgs","rar"}
-            if command_args.method not in valid:
-                raise ValueError(f"Unknown --method={command_args.method}. Use one of: {sorted(valid)}")
-
             if command_args.method == "gepinn":
                 pde.use_gepinn()
             # elif command_args.method == "gracepinn":

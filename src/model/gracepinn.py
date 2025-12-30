@@ -78,22 +78,7 @@ class GracePINNWeighting:
         residuals: Sequence[torch.Tensor],
         model: dde.Model,
     ) -> Optional[torch.Tensor]:
-        """Compute curriculum weights for the PDE residuals in a batch.
-
-        Parameters
-        ----------
-        inputs : (N, d_in)
-            Tọa độ collocation (chỉ phần PDE, đã bỏ BC/IC phía trước).
-        residuals : sequence of tensor
-            Các thành phần residual PDE, mỗi cái shape (N, *).
-        model : dde.Model
-            Model DeepXDE, dùng để đọc epoch hiện tại.
-
-        Returns
-        -------
-        weights : (N,) hoặc None
-            Trọng số v_i(k) trên mỗi điểm PDE.
-        """
+        """Compute curriculum weights for the PDE residuals in a batch."""
         if inputs.numel() == 0:
             return None
 
@@ -103,9 +88,7 @@ class GracePINNWeighting:
         if num_points <= 1:
             return torch.ones(num_points, device=device)
 
-        # ------------------------------------------------------------------
         # 1) Aggregate residual components -> R(i)
-        # ------------------------------------------------------------------
         res_components: List[torch.Tensor] = []
         for res in residuals:
             if res is None or res.numel() == 0:
@@ -118,9 +101,7 @@ class GracePINNWeighting:
         residual_matrix = torch.cat(res_components, dim=1)   # (N, D_total)
         residual_norm = torch.linalg.norm(residual_matrix, dim=1)  # (N,)
 
-        # ------------------------------------------------------------------
         # 2) Normalize coords + space–time scaling via alpha
-        # ------------------------------------------------------------------
         coords_norm = self._normalize(coords)  # scale từng chiều về ~[0,1]
         coords_scaled = coords_norm.clone()
 
@@ -132,42 +113,35 @@ class GracePINNWeighting:
             if torch.isfinite(scale) and scale > 0:
                 coords_scaled[:, time_dims] = coords_scaled[:, time_dims] * scale
             else:
-                # alpha degenerate → bỏ luôn khác biệt theo thời gian
                 coords_scaled[:, time_dims] = 0.0
 
-        # ------------------------------------------------------------------
         # 3) Build spatial-temporal graph
-        # ------------------------------------------------------------------
-        dist = torch.cdist(coords_scaled, coords_scaled, p=2)  # (N, N)
-        mask = self._build_adjacency_mask(dist)
+        edge_index, edge_dists = self._build_edge_index(coords_scaled)
 
-        if not mask.any():
-            # graph rỗng hoàn toàn → quay về uniform
+        if edge_index.shape[1] == 0:
             return torch.ones(num_points, device=device)
 
-        # ------------------------------------------------------------------
         # 4) Kernel weights + roughness L(i)
-        # ------------------------------------------------------------------
-        edge_dists = dist[mask]
         sigma = self._compute_sigma(edge_dists)
 
-        kernel_full = torch.exp(-(dist**2) / (2 * sigma**2 + _EPS))
-        kernel = kernel_full * mask.float()
+        edge_kernel = torch.exp(-(edge_dists**2) / (2 * sigma**2 + _EPS))
 
-        diff_full = residual_norm.unsqueeze(1) - residual_norm.unsqueeze(0)
-        diff = diff_full * mask.float()
+        # Compute roughness using sparse operations
+        # L(i) = [R(i) * di - sum_j wij * R(j)] / di
+        di = torch.zeros(num_points, device=device, dtype=edge_kernel.dtype)
+        di.scatter_add_(0, edge_index[0], edge_kernel)
 
-        roughness = (kernel * diff).sum(dim=1) / (kernel.sum(dim=1) + _EPS)
+        sum_wr = torch.zeros(num_points, device=device, dtype=residual_norm.dtype)
+        sum_wr.scatter_add_(0, edge_index[0], edge_kernel * residual_norm[edge_index[1]])
 
-        # ------------------------------------------------------------------
+        sum_diff = residual_norm * di - sum_wr
+        roughness = sum_diff / (di + _EPS)
+
         # 5) Normalize R and L → [0,1] bằng robust sigmoid
-        # ------------------------------------------------------------------
         level_score = self._robust_normalize(residual_norm)
         roughness_score = self._robust_normalize(roughness)
 
-        # ------------------------------------------------------------------
         # 6) Difficulty fusion D_i(k) với eta(k) = progress
-        # ------------------------------------------------------------------
         progress = min(
             float(model.train_state.epoch) / max(self.config.total_iterations - 1, 1),
             1.0,
@@ -178,9 +152,7 @@ class GracePINNWeighting:
         difficulty = (1.0 - eta) * level_score + eta * roughness_score  # (N,)
         self.last_difficulty = difficulty
 
-        # ------------------------------------------------------------------
-        # 7) Trọng số v_i(k) = D_i(k) (đã ở (0,1) nhờ sigmoid)
-        # ------------------------------------------------------------------
+        # 7) weights = difficulty
         weights = difficulty
         self.last_weights = weights
         return weights
@@ -200,48 +172,117 @@ class GracePINNWeighting:
         )
         return (coords - min_vals) / span
 
-    def _build_adjacency_mask(self, dist: torch.Tensor) -> torch.Tensor:
-        """Build adjacency mask.
-
-        - Nếu radius > 0: dùng rule d(i,j) < radius trước,
-          node nào cô lập thì fallback KNN với K = min degree của các node có hàng xóm.
-        - Nếu radius <= 0 hoặc radius fail: pure KNN với k neighbors.
-        """
-        N = dist.shape[0]
-        device = dist.device
-        eye = torch.eye(N, device=device, dtype=torch.bool)
-
+    def _build_edge_index(self, coords_scaled: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        device = coords_scaled.device
+        N = coords_scaled.shape[0]
         radius = self.config.radius
+        chunk_size = 512  # Larger chunk for better performance
+
+        row_list = []
+        col_list = []
+        dist_list = []
+
         if radius is not None and radius > 0.0:
-            mask = (dist < radius) & (~eye)
-            neighbor_counts = mask.sum(dim=1)
-            has_neighbors = neighbor_counts > 0
+            for i0 in range(0, N, chunk_size):
+                i1 = min(i0 + chunk_size, N)
+                chunk_coords = coords_scaled[i0:i1]
+                chunk_dist = torch.cdist(chunk_coords, coords_scaled, p=2)
+                chunk_row = torch.arange(i0, i1, device=device).unsqueeze(1).expand(-1, N)
+                chunk_col = torch.arange(N, device=device).unsqueeze(0).expand(i1 - i0, -1)
+                chunk_mask = (chunk_dist < radius) & (chunk_row != chunk_col)
+                row_list.append(chunk_row[chunk_mask])
+                col_list.append(chunk_col[chunk_mask])
+                dist_list.append(chunk_dist[chunk_mask])
+                del chunk_dist, chunk_mask  # Free memory
+
+            if row_list:
+                row = torch.cat(row_list)
+                col = torch.cat(col_list)
+                edge_attr = torch.cat(dist_list)
+                edge_index = torch.stack([row, col], dim=0)
+            else:
+                edge_index = torch.empty(2, 0, dtype=torch.long, device=device)
+                edge_attr = torch.empty(0, device=device, dtype=coords_scaled.dtype)
+
+            degrees = torch.zeros(N, device=device, dtype=torch.long)
+            if edge_index.numel() > 0:
+                degrees.scatter_add_(0, edge_index[0], torch.ones(edge_index.shape[1], device=device, dtype=torch.long))
+
+            has_neighbors = degrees > 0
 
             if has_neighbors.any():
-                K = int(neighbor_counts[has_neighbors].min().item())
-                if K > 0:
-                    # Node cô lập: fallback KNN, nhưng chỉ loop trên ít node này
-                    isolated_idx = (~has_neighbors).nonzero(as_tuple=False).view(-1)
-                    for i in isolated_idx.tolist():
-                        row = dist[i].clone()
-                        row[i] = float("inf")
-                        _, idx_knn = torch.topk(row, K, largest=False)
-                        mask[i, idx_knn] = True
-                return mask
-            # nếu tất cả đều cô lập → rơi xuống pure KNN
+                min_k = int(degrees[has_neighbors].min().item())
+                if min_k > 0:
+                    isolated_idx = (~has_neighbors).nonzero(as_tuple=False).squeeze(-1)
+                    if isolated_idx.numel() > 0:
+                        M = isolated_idx.numel()
+                        iso_chunk_size = 512
+                        add_row_list = []
+                        add_col_list = []
+                        add_d_list = []
+                        for m0 in range(0, M, iso_chunk_size):
+                            m1 = min(m0 + iso_chunk_size, M)
+                            iso_ids = isolated_idx[m0:m1]
+                            dist_iso = torch.cdist(coords_scaled[iso_ids], coords_scaled, p=2)
+                            rows_iso = torch.arange(m0, m1, device=device)
+                            for ii in range(m1 - m0):
+                                global_i = iso_ids[ii]
+                                dist_iso[ii, global_i] = float("inf")
+                            values, idx_knn = torch.topk(dist_iso, min_k, dim=1, largest=False)
+                            add_row = rows_iso.unsqueeze(1).expand(-1, min_k).flatten()
+                            add_col = idx_knn.flatten()
+                            add_d = values.flatten()
+                            add_row_list.append(add_row)
+                            add_col_list.append(add_col)
+                            add_d_list.append(add_d)
+                            del dist_iso
+                        if add_row_list:
+                            add_row = torch.cat(add_row_list)
+                            add_col = torch.cat(add_col_list)
+                            add_d = torch.cat(add_d_list)
+                            add_index = torch.stack([isolated_idx[add_row], add_col], dim=0)
+                            edge_index = torch.cat([edge_index, add_index], dim=1)
+                            edge_attr = torch.cat([edge_attr, add_d])
 
-        # ----------------- Pure KNN (vectorized) -----------------
-        k = min(self.config.k, max(N - 1, 1))
-        if k <= 0:
-            return torch.zeros_like(dist, dtype=torch.bool)
+        else:
+            # Pure KNN
+            k = min(self.config.k, max(N - 1, 1))
+            if k <= 0:
+                return torch.empty(2, 0, dtype=torch.long, device=device), torch.empty(0, device=device, dtype=coords_scaled.dtype)
+            row_list = []
+            col_list = []
+            val_list = []
+            for i0 in range(0, N, chunk_size):
+                i1 = min(i0 + chunk_size, N)
+                chunk_coords = coords_scaled[i0:i1]
+                chunk_dist = torch.cdist(chunk_coords, coords_scaled, p=2)
+                local_idx = torch.arange(i0, i1, device=device)
+                chunk_dist[torch.arange(i1 - i0), local_idx] = float("inf")
+                values, idx = torch.topk(chunk_dist, k, dim=1, largest=False)
+                row = torch.arange(i0, i1, device=device).unsqueeze(1).expand(-1, k).flatten()
+                row_list.append(row)
+                col_list.append(idx.flatten())
+                val_list.append(values.flatten())
+                del chunk_dist
+            if row_list:
+                row = torch.cat(row_list)
+                col = torch.cat(col_list)
+                edge_attr = torch.cat(val_list)
+                edge_index = torch.stack([row, col], dim=0)
+            else:
+                edge_index = torch.empty(2, 0, dtype=torch.long, device=device)
+                edge_attr = torch.empty(0, device=device, dtype=coords_scaled.dtype)
 
-        # tránh self-edge bằng cách cộng inf lên đường chéo
-        dist_knn = dist + eye.to(dist.dtype) * float("inf")
-        _, idx = torch.topk(dist_knn, k, dim=1, largest=False)  # (N, k)
+        # Add reverse edges for undirected graph
+        row, col = edge_index
+        rev_mask = row != col  # No self-loops
+        row_rev = col[rev_mask]
+        col_rev = row[rev_mask]
+        attr_rev = edge_attr[rev_mask]
+        edge_index = torch.cat([edge_index, torch.stack([row_rev, col_rev], dim=0)], dim=1)
+        edge_attr = torch.cat([edge_attr, attr_rev])
 
-        mask = torch.zeros_like(dist, dtype=torch.bool)
-        mask.scatter_(1, idx, True)
-        return mask
+        return edge_index, edge_attr
 
     def _compute_sigma(self, dists: torch.Tensor) -> torch.Tensor:
         """Kernel length-scale sigma từ các cạnh đang active."""
@@ -298,13 +339,11 @@ class GracePDEData(PDE):
         self.model = model
 
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
-        """Override PDE.losses to apply GracePINN weights on PDE residuals only."""
         if backend_name in ["tensorflow.compat.v1", "tensorflow", "pytorch", "paddle"]:
             outputs_pde = outputs
         elif backend_name == "jax":
             outputs_pde = (outputs, aux[0])
 
-        # 1) PDE residuals f
         f = []
         if self.pde is not None:
             if get_num_args(self.pde) == 2:
@@ -319,7 +358,6 @@ class GracePDEData(PDE):
             if not isinstance(f, (list, tuple)):
                 f = [f]
 
-        # 2) Normalize loss_fn
         if not isinstance(loss_fn, (list, tuple)):
             loss_fn = [loss_fn] * (len(f) + len(self.bcs))
         elif len(loss_fn) != len(f) + len(self.bcs):
@@ -328,11 +366,9 @@ class GracePDEData(PDE):
                 f"but only {len(loss_fn)} losses."
             )
 
-        # 3) Split BC/IC vs PDE collocation region
         bcs_start = torch.cumsum(torch.tensor([0] + self.num_bcs), dim=0).tolist()
         error_f = [fi[bcs_start[-1] :] for fi in f]
 
-        # 4) Compute GracePINN weights trên PDE points
         weights = None
         if (
             self.weight_strategy is not None
@@ -344,15 +380,11 @@ class GracePDEData(PDE):
                 weights = self.weight_strategy(inputs_pde, error_f, self.model)
         self.current_weights = weights
 
-        # 5) Xây losses: PDE (weighted) + BC/IC (unweighted)
         losses = []
-
-        # PDE terms
         for i, error in enumerate(error_f):
             if weights is None:
                 losses.append(loss_fn[i](bkd.zeros_like(error), error))
             else:
-                # L = (sum v_i e_i^2) / (sum v_i)
                 sqrt_w = torch.sqrt(weights.clamp_min(0.0)).to(
                     error.device, dtype=error.dtype
                 )
@@ -368,7 +400,6 @@ class GracePDEData(PDE):
                 )
                 losses.append(base * normalizer)
 
-        # BC/IC terms
         for i, bc in enumerate(self.bcs):
             beg, end = bcs_start[i], bcs_start[i + 1]
             error = bc.error(self.train_x, inputs, outputs, beg, end)
@@ -396,7 +427,6 @@ class GraceTimePDEData(TimePDE):
         self.model = model
 
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
-        """Same logic as GracePDEData.losses but cho TimePDE."""
         if backend_name in ["tensorflow.compat.v1", "tensorflow", "pytorch", "paddle"]:
             outputs_pde = outputs
         elif backend_name == "jax":
@@ -471,27 +501,12 @@ class GraceTimePDEData(TimePDE):
 # Convenience factory: build config từ PDE object
 # -----------------------------------------------------------------------------
 
-# -----------------------------------------------------------------------------
-# Convenience factory: build config từ PDE object
-# -----------------------------------------------------------------------------
-
 def build_gracepinn_for_pde(
     pde: BasePDE,
     total_iterations: int,
     **overrides,
 ) -> GracePINNWeighting:
-    """Factory gắn GracePINN cho một PDE cụ thể.
-
-    - Nhận duy nhất pde + total_iterations + optional overrides.
-    - Default:
-        + Nếu là BaseTimePDE: alpha=0.5, time_dims=[dim cuối].
-        + Nếu là BasePDE (elliptic / steady): alpha=0.0, time_dims=None.
-        + k=6, radius=0.15, percentiles=(25,75).
-    - Nếu sau này muốn ablation hyper thì truyền overrides:
-        pde.enable_gracepinn(total_iterations=T, k=8, radius=0.2, ...)
-    """
-
-    # 1) Phân biệt PDE theo thời gian hay không
+    """Factory gắn GracePINN cho một PDE cụ thể."""
     if isinstance(pde, BaseTimePDE):
         default_alpha = 0.5
         default_time_dims: Optional[Sequence[int]] = [pde.input_dim - 1]
@@ -499,14 +514,12 @@ def build_gracepinn_for_pde(
         default_alpha = 0.0
         default_time_dims = None
 
-    # 2) Lấy hyper từ overrides nếu có, ngược lại dùng default
     k = overrides.pop("k", 6)
     radius = overrides.pop("radius", 0.15)
     percentiles = overrides.pop("percentiles", (25.0, 75.0))
     alpha = overrides.pop("alpha", default_alpha)
     time_dims = overrides.pop("time_dims", default_time_dims)
 
-    # 3) Nếu caller truyền key lạ → báo lỗi rõ, tránh bug câm
     if overrides:
         unknown = ", ".join(overrides.keys())
         raise ValueError(f"Unknown GracePINN hyperparameters: {unknown}")
@@ -520,4 +533,3 @@ def build_gracepinn_for_pde(
         radius=radius,
     )
     return GracePINNWeighting(cfg)
-

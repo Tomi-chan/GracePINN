@@ -212,6 +212,7 @@ class BasePDE():
         self.data_kwargs = {"weight_strategy": weight_strategy}
 
 
+
 class BaseTimePDE(BasePDE):
 
     def __init__(self):
@@ -273,4 +274,5 @@ class BaseTimePDE(BasePDE):
         )
         self.data_class = GraceTimePDEData
         self.data_kwargs = {"weight_strategy": weight_strategy}
+
 
