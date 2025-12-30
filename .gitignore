@@ -192,3 +192,5 @@ env/
 other_runs/
 summary.csv
 runs/
+benchmark_copy.py
+extract_pinnacle_results.py
